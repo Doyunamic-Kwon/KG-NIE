@@ -99,22 +99,34 @@ kaggle datasets download -d crowdflower/twitter-airline-sentiment --unzip
 | **트윗 (5개)** | 12개 | 20개 |
 | **위키피디아 (5개)** | 24개 | 23개 |
 
-### 관찰된 주요 이슈 (실제 오류)
+### 관찰된 주요 이슈 — Gold 정답 포함
 
-| 이슈 | NLTK 실제 동작 | spaCy 실제 동작 |
-|------|--------------|----------------|
-| `#CaliforniaFires` 해시태그 | ✅ ORG로 인식 | ⚠️ 트윗3에서 **PERSON**으로 오분류 |
-| `Gov. Newsom` 직함+이름 | ❌ `Hey`→PERSON, `Newsom`→LOC (분리 오류) | ✅ `Newsom`→PERSON |
-| `#TuesdayThoughts` | ❌ 미인식 | ❌ **PERSON**으로 오분류 |
-| `Stident` (오타 "Student") | ✅ `Stident Leadership Council`→ORG | ✅ `the Stident Leadership Council`→ORG |
-| `Bake` (문장 첫 단어) | ❌ LOC 오분류 | ❌ ORG 오분류 |
-| 공항 코드 `ORD`, `EWR` | ⚠️ 미인식 또는 ORG 오분류 | ⚠️ ORG/LOC 혼용 오분류 |
-| `@AmericanAir` 멘션 | ✅ ORG 인식 (@ 제거 후) | ❌ **LOC**으로 오분류 |
+> **컬럼 설명**  
+> `Gold` = 정답 레이블 / `NLTK Raw` = 전처리 없이 실행한 결과 / `spaCy Raw` = 동일  
+> `V2 후` = URL·이모티콘 제거 + @·# 처리 + 공항 코드·항공사명 가제터 정규화 적용 결과
+
+| 이슈 토큰 | **Gold 정답** | NLTK Raw | spaCy Raw | V2 후 변화 |
+|-----------|:------------:|----------|----------|-----------|
+| `#CaliforniaFires` | **EVENT** (산불 이벤트) | ⚠️ ORG 오분류 | ⚠️ ORG 오분류 (트윗3에서 PERSON) | # 제거 → `CaliforniaFires` 그대로, 여전히 오분류 |
+| `#TuesdayThoughts` | **비개체** (인식 불필요) | ✅ 미인식 (정답) | ❌ PERSON 오분류 | # 제거 → `TuesdayThoughts`; spaCy 오분류 지속 |
+| `Bake` (문장 첫 단어) | **비개체** ("Bake sale"은 활동) | ❌ LOC **False Positive** | ❌ ORG **False Positive** | V1에서 제거 불가 — 문맥 판단이어야 해결 |
+| `Gov. Newsom` | **PERSON** (정치인) | ❌ `Hey`→PERSON, `Newsom`→LOC (경계 오류) | ✅ `Newsom`→PERSON | 직함 처리 없음, 동일 |
+| `@AmericanAir` 멘션 | **ORG** (항공사) | ✅ ORG 인식 | ❌ LOC 오분류 | V2: `@AmericanAir→American Airlines` → spaCy ORG 정확 |
+| 공항 코드 `ORD`, `EWR` | **LOC** (도시/공항) | ⚠️ ORG 오분류 | ⚠️ ORG·LOC 혼용 | V2: `ORD→Chicago O'Hare` → LOC 정확도 향상 |
+| `Stident` (오타) | **ORG** ("Student Leadership Council") | ✅ `Stident Leadership Council`→ORG | ✅ `the Stident Leadership Council`→ORG | 두 모델 모두 오타에도 강건 |
+
+**V1 vs V2 처리 내용 요약:**
+
+| 전처리 단계 | 처리 내용 | 위 이슈에 대한 효과 |
+|------------|----------|-------------------|
+| **V1** | URL 제거, 이모티콘 제거, `!!!`·`???` → `.` | 노이즈 제거만, 개체 인식 정확도 개선 미미 |
+| **V2** | V1 + `@(\w+)→단어` + `#(\w+)→단어` + 가제터(항공사명, IATA 코드 정규화) | `@AmericanAir→American Airlines`, `ORD→Chicago O'Hare` 등 복원 → spaCy F1 13배 향상 |
 
 > **핵심 관찰**:
-> - 실제 트윗에서 `Stident`(오타)가 있어도 두 모델 모두 ORG로 인식 → **노이즈 내성 확인**
-> - `#TuesdayThoughts`(날짜 해시태그)를 spaCy가 PERSON으로 인식 → **해시태그 맥락 혼란**  
-> - 위키피디아에서는 spaCy가 NLTK보다 훨씬 정확 → **표준 텍스트 vs 소셜 미디어 격차 확인**
+> - `#TuesdayThoughts`는 **개체가 아님** — NLTK의 미인식이 오히려 정답, spaCy가 PERSON 오분류
+> - `#CaliforniaFires`는 ORG가 아닌 **EVENT**가 적절하나, 표준 NER 온톨로지(PERSON/ORG/LOC)에서는 EVENT 클래스가 없어 분류 자체가 한계
+> - `Bake`는 "Bake sale"(자선 행사)의 일부 — 독립 개체가 아닌데 인식하는 **False Positive**이며, 전처리로 해결 불가 (문맥 이해 필요)
+> - `Stident`(오타)도 ORG로 정확 인식 → 두 모델 모두 형태 기반 패턴에 강건함을 보여줌
 
 ---
 
@@ -123,7 +135,7 @@ kaggle datasets download -d crowdflower/twitter-airline-sentiment --unzip
 | # | Feature | 설명 | 트윗 예시 |
 |---|---------|------|----------|
 | 1 | **@멘션 처리** | `@` 제거 → 항공사 가제터 대조 → 정식명 복원 | `@united` → `United Airlines` |
-| 2 | **#해시태그 분리** | `#` 제거, 단어만 유지 → NER 후보 처리 | `#CaliforniaFires` → `CaliforniaFires` → LOC |
+| 2 | **#해시태그 분리** | `#` 제거, 단어만 유지 → NER 후보 처리 | `#CaliforniaFires` → `CaliforniaFires` → EVENT (산불); `#TuesdayThoughts`는 비개체이므로 인식 불필요 |
 | 3 | **이모티콘·URL 제거** | `[^\x00-\x7F]` 패턴으로 비ASCII 제거 | `🔥`, `http://…` → 제거 |
 | 4 | **공항 코드 정규화** | IATA 코드 → 공항/도시 전체명 치환 | `ORD` → `Chicago O'Hare`, `JFK` → `JFK Airport` |
 | 5 | **중복 구두점 정리** | `!!!`, `???`, `...` → 단일 구두점 | `come on down!!!` → `come on down.` |
